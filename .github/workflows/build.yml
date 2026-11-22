@@ -1,0 +1,50 @@
+name: build
+on: [push, workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the sound engine (no JUCE)
+        run: |
+          clang++ -O2 -std=c++17 src/test_render.cpp -o render
+          for i in $(seq 0 15); do ./render $i 3 48000 /tmp/t.raw; done | tee render.log
+          ! grep -q "NaN" render.log
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCOPY_PLUGIN_AFTER_BUILD=OFF
+      - name: Build
+        run: cmake --build build --config Release -j 4
+      - name: Package
+        run: |
+          mkdir -p out
+          find build -name "undertow.vst3" -maxdepth 6 -type d -exec ditto {} out/undertow.vst3 \;
+          find build -name "undertow.component" -maxdepth 6 -type d -exec ditto {} out/undertow.component \;
+          find build -name "undertow.app" -maxdepth 6 -type d -exec ditto {} out/undertow.app \;
+          for b in out/undertow.vst3 out/undertow.component out/undertow.app; do codesign --force --deep -s - "$b"; done
+          cp "installer/Instalar undertow.command" out/ && chmod +x "out/Instalar undertow.command"
+          cp installer/LEEME.txt out/
+          cd out && zip -qry ../bsbr-undertow-mac.zip . && cd ..
+          ls -la out
+      - name: Validate AU
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          ditto out/undertow.component ~/Library/Audio/Plug-Ins/Components/undertow.component
+          killall -9 AudioComponentRegistrar 2>/dev/null; sleep 3
+          auval -v aumu Undr Bsbr 2>&1 | tail -40
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bsbr-undertow-mac
+          path: bsbr-undertow-mac.zip
+      - name: Publish download (Releases)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: undertow 1.0.${{ github.run_number }}
+          files: bsbr-undertow-mac.zip
+          body: |
+            Descarga **bsbr-undertow-mac.zip**, descomprímelo y haz doble clic en **Instalar undertow.command**
+            (si macOS lo bloquea: clic derecho > Abrir). Luego en Live: Preferencias > Plug-ins > Rescan.

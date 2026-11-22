@@ -1,0 +1,13 @@
+bsbr · undertow  -  kick + rumble
+
+INSTALAR
+1. Doble clic en "Instalar undertow.command".
+   Si el Mac dice que no puede abrirlo: clic derecho sobre el archivo > Abrir > Abrir.
+2. Abre Ableton Live > Preferencias (Cmd + ,) > Plug-ins:
+   activa "Use VST3 Plug-in System Folders" y/o "Use Audio Units", y pulsa "Rescan".
+3. En el navegador de Live: Plug-ins > bsbr > undertow. Arrástralo a una pista MIDI.
+
+USAR
+- Cada nota MIDI dispara el bombo (velocidad 100 o más = golpe completo). El tono lo marca Pitch, no la nota.
+- Botón "hit" para escucharlo sin MIDI. Menú de presets arriba a la derecha.
+- undertow.app es una versión independiente para probarlo fuera de Live.
