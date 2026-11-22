@@ -1,5 +1,5 @@
 // bsbr undertow: kick + rumble instrument. Native port of the web engine (undertow-worklet.js), 1:1.
-// Chain: synth kick -> finish (EQ, comp, limiter) -> notch pre -> drive (mack / valve / sine / analog / chanel, 4x)
+// Chain: synth kick -> finish (EQ, comp, limiter) -> notch pre -> drive (bypass / valve / sine / analog, 4x)
 //        -> notch post -> + beater click -> dry / haze (FDN reverb + drift) / echo (synced ping-pong)
 //        -> each fx path: HPF -> LPF -> OTT -> duck -> sum -> soft clip or limiter -> bsbr seal -> vol -> ceiling.
 // No allocations in process(). Latency: 10 ms (two 5 ms look-ahead stages).
@@ -171,7 +171,7 @@ inline double soft(double x) { double a = std::abs(x); return x / std::pow(1 + s
 struct Params {
   double kpitch = 31, kpunch = 3, ksweep = 0.1, kcurve = 0.55, kshape = 0.3, klen = 1, katt = 0, kbody = 0, kdrop = 0;
   double click = 0.3, ctone = 3500, nfreq = 300, ndepth = 0; int npos = 1;
-  int dtype = 0, gale = 0; double gain = 0.6, low = 2, high = -3;
+  int dtype = 2; double gain = 0.6, low = 2, high = -3;
   double vsend = 0.4, vsize = 0.7, vpre = 0.03, vmod = 0.5; int mvmode = 0; double mvamt = 0.4, mvrate = 0.15;
   double vhpf = 800, vdark = 10000, vduck = 0.8;
   int ddiv = 2; double dsend = 0.35, dfb = 0.45, dinto = 0.2, ehpf = 35, edark = 300, educk = 0.8;
@@ -211,7 +211,6 @@ public:
     osL.init(sr); osR.init(sr);
     for (auto& s : slots) { s.os.init(sr); s.lo = Shelf(); s.hi = Shelf(); }
     lowSh4 = Shelf(); highSh4 = Shelf();
-    mkA.init(19160, 0.431684981684982, sr * 4); mkB.init(19160, 1.1582298, sr * 4);
     ottV.init(sr); ottE.init(sr);
     ceilLim.init(sr, 0.944, 120); clipLim.init(sr, 0.9, 80);
     clipDL.assign(clipLim.n, 0.f); clipDR.assign(clipLim.n, 0.f); clipI = 0;
@@ -254,11 +253,9 @@ private:
   int dlen = 1, dw = 0; std::vector<float> dL, dR; Smooth dtime;
   double eLpL = 0, eLpR = 0, eHpL = 0, eHpR = 0;
   double vb1 = 0, vb2 = 0, vdc1 = 0, vdc2 = 0, vLP = 0, sLP = 0, sLPc = 0;
-  double sGain = 1, sGale = 1, sVs = 0, sDs = 0, sDi = 0, sCd = 1, sBus = 1, sMod = 0, sMv = 0, lowS = 0, highS = 0;
+  double sGain = 1, sVs = 0, sDs = 0, sDi = 0, sCd = 1, sBus = 1, sMod = 0, sMv = 0, lowS = 0, highS = 0;
   OS4 osL, osR; Slot slots[2]; Shelf lowSh4, highSh4;
   double cvbA = 0, cvbR = 0, cvdcC = 0;
-  Peak chThump, chPres; double chDc = 0;
-  LP mkA, mkB; double mkHP2s = 0;
   OTT ottV, ottE; double ob[2] = {0, 0};
   SVF xo[2]; double phs[2][6] = {}, phFb[2] = {0, 0}, phA[2] = {0, 0}; SVF nt[2][3]; double mvPh = 0;
   double vhS = 35, ehS = 80, vdS = 260, edS = 600; SVF vh[4], eh[4], vd[4], ed[4];
@@ -269,7 +266,7 @@ private:
   double rnd() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng / 4294967296.0) * 2 - 1; }
 
   // block constants
-  double gT, galeT, mkHP1, mkHP2, dXfS, mXfS, cXfS, gC, nPreT, nPostT, ckLen, ckW, ckMf, ckLPc, vLPc, mvInc, mvT;
+  double gT, mkHP1, dXfS, mXfS, cXfS, gC, nPreT, nPostT, ckLen, ckW, ckMf, ckLPc, vLPc, mvInc, mvT;
   double scale, rgain[8], fdnIn, dampC, lhpC, preT, lfoInc, modT, dTarget, eLpC, eHpC, fb, oA, oR, oG, oDepth, busT;
   double kA, kR, dDown, dUp, dThr, vRatio, eRatio, dryG, wetG, cdT, c1, c2, cs, eAs[3], eR, tF, tS, sqT, crT, mxT, volT, dcC;
 
@@ -280,8 +277,8 @@ private:
     slot = 0; curType = -1; oldType = 0; curMv = -1; oldMv = 0; curCm = -1; oldCm = 0; dXf = mXf = cXf = 0;
     gDry = 1; gWet = 0.8; gVol = 1; gSq = gCr = gMx = 0; fHP.clear(); fF0.clear(); fBox.clear(); fEnv = 0;
     dw = 0; eLpL = eLpR = eHpL = eHpR = 0; vb1 = vb2 = vdc1 = vdc2 = vLP = sLP = 0;
-    sGain = 1; sGale = 1; sVs = sDs = sDi = 0; sCd = 1; sBus = 1; sMod = sMv = lowS = highS = 0;
-    chDc = 0; chThump.clear(); chPres.clear(); mkA.clear(); mkB.clear(); mkHP2s = 0; ottV.clear(); ottE.clear();
+    sGain = 1; sVs = sDs = sDi = 0; sCd = 1; sBus = 1; sMod = sMv = lowS = highS = 0;
+    ottV.clear(); ottE.clear();
     for (int c = 0; c < 2; c++) { xo[c].clear(); phFb[c] = 0; for (int j = 0; j < 6; j++) phs[c][j] = 0; for (int j = 0; j < 3; j++) nt[c][j].clear(); }
     mvPh = 0; vhS = 35; ehS = 80; vdS = 260; edS = 600; for (int j = 0; j < 4; j++) { vh[j].clear(); eh[j].clear(); vd[j].clear(); ed[j].clear(); }
     kEnv = vDuckDb = eDuckDb = 0; bl1 = bl2 = bh1 = bh2 = 0; for (int j = 0; j < 3; j++) benv[j] = 0; sh1 = sh2 = tFast = tSlow = dcL = dcR = 0;
@@ -328,11 +325,6 @@ private:
     v *= 1.3; double a = std::abs(v), r = a - 1; if (r > osRed) osRed = r;
     double a4 = a * a * a * a; return v / std::pow(1 + a4 * a4, 0.125) * 0.95;
   }
-  double mackCore(double v) {
-    v = mkA.run(v * 1.6);
-    double c = v > 1 ? 1 : v < -1 ? -1 : v, r = std::abs(v) - 1; if (r > osRed) osRed = r;
-    return mkB.run(c - c * c * c * c * c * 0.1768) * 1.15;
-  }
   double valveCore(double u) {
     vb1 += (std::max(0.0, u) - vb1) * (u > vb1 ? cvbA : cvbR);
     double a = triode(u * 1.2 - vb1 * 0.4);
@@ -342,22 +334,13 @@ private:
     double b2 = triode(a * 0.9 - vb2 * 0.3), r = std::abs(a) * 0.9 - std::abs(b2); if (r > osRed) osRed = r;
     vdc2 += (b2 - vdc2) * cvdcC; return (b2 - vdc2) * 0.72;
   }
-  double chanelCore(double u) {
-    u = chThump.run(u);
-    double y = tanhf_(u + 0.35) - 0.3364;
-    chDc += (y - chDc) * cvdcC; y -= chDc;
-    y = chPres.run(y) * 1.5;
-    double a = std::abs(y), r = a - 1; if (r > osRed) osRed = r;
-    return y / std::cbrt(1 + a * a * a) * 0.95;
-  }
 
-  double driveOf(int type, double hx, Slot& sl, double g, double gale) {
+  // 0 bypass: the saturation circuit is skipped (only the 13 Hz coupling high-pass, inaudible)
+  double driveOf(int type, double hx, Slot& sl, double g) {
     if (type == 2) { double m = sl.os.run(sl.hi.run(sl.lo.run(hx * g)), [this](double v) { return sineCore(v); }); sLP += (m - sLP) * sLPc; return sLP; }
     if (type == 3) return sl.os.run(sl.hi.run(sl.lo.run(hx * g)), [this](double v) { return analogCore(v); });
     if (type == 1) { double b2 = sl.os.run(hx * g, [this](double v) { return valveCore(v); }); vLP += (b2 - vLP) * vLPc; return vLP; }
-    if (type == 4) return sl.os.run(sl.hi.run(sl.lo.run(hx * g * gale)), [this](double v) { return chanelCore(v); });
-    double m = sl.os.run(sl.hi.run(sl.lo.run(hx * g)), [this](double v) { return mackCore(v); });
-    mkHP2s += (m - mkHP2s) * mkHP2; return m - mkHP2s;
+    return hx;
   }
 
   double finish(double x) {
@@ -397,15 +380,15 @@ private:
   }
 
   void blockSetup() {
-    gT = dbToG(clampd(p.gain, 0, 1) * 12); galeT = p.gale ? dbToG(18) : 1;
-    mkHP1 = 1 - std::exp(-TAU * 13 / sr); mkHP2 = 1 - std::exp(-TAU * 2 / sr);
+    gT = dbToG(clampd(p.gain, 0, 1) * 12);
+    mkHP1 = 1 - std::exp(-TAU * 13 / sr);
     double kf0 = 440 * std::pow(2.0, (std::round(p.kpitch) - 69) / 12);
     fHP.set(1, 25, 0.7, 0, sr); fF0.set(0, kf0, 1.2, 2, sr); fBox.set(0, 320, 1, -3.5, sr);
     fA = 1 - std::exp(-1 / (0.012 * sr)); fR = 1 - std::exp(-1 / (0.14 * sr));
     lowS += (p.low - lowS) * 0.15; highS += (p.high - highS) * 0.15;
     double lq = std::round(lowS * 20) / 20, hq = std::round(highS * 20) / 20;
     for (auto& sl : slots) { sl.lo.set(true, 80, lq, sr); sl.hi.set(false, 12000, hq, sr); }
-    int dt = std::clamp(p.dtype, 0, 4), mv = p.mvmode ? 1 : 0, cm = p.cmode ? 1 : 0;
+    int dt = std::clamp(p.dtype, 0, 3), mv = p.mvmode ? 1 : 0, cm = p.cmode ? 1 : 0;
     if (dt != curType) { if (curType >= 0) { oldType = curType; dXf = 1; slot = 1 - slot; } curType = dt; }
     if (mv != curMv) { if (curMv >= 0) { oldMv = curMv; mXf = 1; } curMv = mv; }
     if (cm != curCm) { if (curCm >= 0) { oldCm = curCm; cXf = 1; } curCm = cm; }
@@ -420,7 +403,6 @@ private:
     lowSh4.set(true, 80, lq, S4); highSh4.set(false, 12000, hq, S4);
     cvbA = 1 - std::exp(-1 / (0.002 * S4)); cvbR = 1 - std::exp(-1 / (0.04 * S4));
     vLPc = 1 - std::exp(-TAU * 5000 / sr); cvdcC = 1 - std::exp(-TAU * 15 / S4);
-    chThump.set(0, 85, 0.8, 3, S4); chPres.set(0, 2600, 0.8, 4, S4);
     mvInc = TAU * clampd(p.mvrate, 0.01, 4) / sr; mvT = clampd(p.mvamt, 0, 1);
     xo[0].set(300, 0.5, sr); xo[1].set(300, 0.5, sr);
     scale = 1 + p.vsize * 1.5; double rt60 = 1.5 + p.vsize * p.vsize * 18, gAvg = 0;
@@ -453,7 +435,7 @@ private:
   }
 
   void tick(double* out) {
-    sGain += (gT - sGain) * gC; sGale += (galeT - sGale) * gC; sVs += (p.vsend - sVs) * gC; sDs += (p.dsend - sDs) * gC;
+    sGain += (gT - sGain) * gC; sVs += (p.vsend - sVs) * gC; sDs += (p.dsend - sDs) * gC;
     sDi += (p.dinto - sDi) * gC; sCd += (cdT - sCd) * gC; sBus += (busT - sBus) * gC; sMod += (modT - sMod) * gC; sMv += (mvT - sMv) * gC;
     double modD = sMod, mvAmt = sMv, busG = sBus, cDrive = sCd;
     double x = finish(voice(voices[0]) + voice(voices[1]));
@@ -463,9 +445,9 @@ private:
     double xn = x - (x - notchPre.lp - notchPre.hp) * nPreG;
     hpIn += (xn - hpIn) * mkHP1;
     double hx = xn - hpIn;
-    double m = driveOf(curType, hx, slots[slot], sGain, sGale);
+    double m = driveOf(curType, hx, slots[slot], sGain);
     if (dXf > 0) {
-      double mo = driveOf(oldType, hx, slots[1 - slot], sGain, sGale);
+      double mo = driveOf(oldType, hx, slots[1 - slot], sGain);
       double w = 0.5 - 0.5 * std::cos(PI * dXf); m = m * (1 - w) + mo * w;
       dXf = std::max(0.0, dXf - dXfS);
     }
