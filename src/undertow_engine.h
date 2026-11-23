@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 namespace undertow {
 
@@ -180,7 +181,7 @@ struct Params {
 };
 
 struct Voice {
-  bool on = false, fading = false; double age = 0, vel = 1, fade = 1, ph = 0, l1 = 0, l2 = 0, n1 = 0, n2 = 0;
+  uint32_t seed = 1; bool on = false, fading = false; double age = 0, vel = 1, fade = 1, ph = 0, l1 = 0, l2 = 0, n1 = 0, n2 = 0;
   double kL = 1, kf0 = 50, ksw = 0.1, kcv = 0.5, kpu = 2, kdr = 0, ksh = 0, kat = 0.0003, kbo = 0, kc = 0.05;
 };
 
@@ -190,8 +191,16 @@ struct Slot { OS4 os; Shelf lo, hi; };
 class Engine {
 public:
   Params p;
-  // meters for the UI (read from the message thread)
+  // meters for the UI: plain floats written by the audio thread, collected by the processor after each block
   float peakOut = 0; int hits = 0; float lastVel = 0;
+  float mDrv = 0, mDuckV = 0, mDuckE = 0, mClip = 0, mLim = 0, mSeal[3] = {0, 0, 0};
+  double voicePos = -1; // 0..1 through the current kick, -1 when silent
+  // telemetry for the live view: one column every colLen samples (max levels), single producer / single consumer ring
+  struct Col { float dry = 0, wet = 0, out = 0, duck = 0; };
+  static constexpr int RING = 4096;
+  Col ring[RING]; std::atomic<int> ringW{0}; int colLen = 320;
+  float ottDown() { float d = (float)std::max(ottV.down, ottE.down); ottV.down = ottE.down = 0; return d; }
+  float ottUp() { float u = (float)std::max(ottV.up, ottE.up); ottV.up = ottE.up = 0; return u; }
 
   void prepare(double sampleRate) {
     sr = sampleRate;
@@ -225,6 +234,7 @@ public:
     v0.kL = std::max(0.05, p.klen); v0.kf0 = 440 * std::pow(2.0, (std::round(p.kpitch) - 69) / 12); v0.ksw = std::max(0.005, p.ksweep);
     v0.kcv = 1 + p.kcurve * 7; v0.kpu = p.kpunch - 1; v0.kdr = p.kdrop / 12; v0.ksh = p.kshape; v0.kat = std::max(0.0003, p.katt); v0.kbo = p.kbody;
     v0.kc = 1 - std::exp(-TAU * (350 + 2600 * p.kshape) / sr);
+    v0.seed = 0x9E3779B9u; ckSeed = 0x7F4A7C15u; // same noise on every hit: identical attacks
     v0.on = true; v0.fading = false; v0.fade = 1; v0.age = 0; v0.vel = vel; v0.ph = 0; v0.l1 = v0.l2 = v0.n1 = v0.n2 = 0;
     ckAge = 0; ckVel = vel * p.click; ckPh = 0; ckL1 = ckL2 = 0;
     hits++; lastVel = (float)vel;
@@ -241,7 +251,7 @@ public:
 private:
   double sr = 48000, S4 = 192000;
   Voice voices[2];
-  double hpIn = 0, mLP = 0, redShow = 0, osRed = 0;
+  double hpIn = 0, mLP = 0, osRed = 0;
   std::vector<float> pre; int pw = 0; Smooth preS; Allpass ap[4];
   double fdnBase[8] = {}; FdnLine fdn[8]; Smooth rLen[8]; double lph[8] = {}, modL[8] = {};
   double vAlive = 0, bodyC = 0;
@@ -262,8 +272,9 @@ private:
   double kEnv = 0, vDuckDb = 0, eDuckDb = 0;
   double bl1 = 0, bl2 = 0, bh1 = 0, bh2 = 0, benv[3] = {0, 0, 0}, sh1 = 0, sh2 = 0, tFast = 0, tSlow = 0, dcL = 0, dcR = 0;
   LookLim ceilLim, clipLim; std::vector<float> clipDL, clipDR; int clipI = 0; double lo2[2] = {0, 0};
-  uint32_t rng = 22222;
-  double rnd() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng / 4294967296.0) * 2 - 1; }
+  Col curCol; int colCnt = 0;
+  uint32_t ckSeed = 1;
+  static double rndS(uint32_t& r) { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r / 4294967296.0) * 2 - 1; }
 
   // block constants
   double gT, mkHP1, dXfS, mXfS, cXfS, gC, nPreT, nPostT, ckLen, ckW, ckMf, ckLPc, vLPc, mvInc, mvT;
@@ -272,7 +283,7 @@ private:
 
   void clearScalars() {
     for (auto& v : voices) v = Voice();
-    hpIn = mLP = redShow = osRed = 0; pw = 0; vAlive = 0; for (int j = 0; j < 8; j++) { lph[j] = 0; fdn[j].w = 0; fdn[j].lp = fdn[j].hp = 0; }
+    hpIn = mLP = osRed = 0; pw = 0; vAlive = 0; for (int j = 0; j < 8; j++) { lph[j] = 0; fdn[j].w = 0; fdn[j].lp = fdn[j].hp = 0; }
     ckAge = 1e9; ckVel = ckPh = ckN = ckL1 = ckL2 = 0; ckBP.clear(); notch.clear(); notchPre.clear(); nfS = 300; nPreG = nPostG = 0;
     slot = 0; curType = -1; oldType = 0; curMv = -1; oldMv = 0; curCm = -1; oldCm = 0; dXf = mXf = cXf = 0;
     gDry = 1; gWet = 0.8; gVol = 1; gSq = gCr = gMx = 0; fHP.clear(); fF0.clear(); fBox.clear(); fEnv = 0;
@@ -307,7 +318,7 @@ private:
     if (v.ksh > 0.001) { double tri = 2 / PI * std::asin(s); s = s * (1 - v.ksh) + std::sin(tri * 1.4) / std::sin(1.4) * v.ksh; }
     double att = t < v.kat ? std::pow(std::sin(PI / 2 * t / v.kat), 2) : 1;
     double amp = std::exp(-6.9 * std::pow(t / L, 1.15)) * att;
-    v.n1 += (rnd() - v.n1) * bodyC; v.n2 += (v.n1 - v.n2) * bodyC;
+    v.n1 += (rndS(v.seed) - v.n1) * bodyC; v.n2 += (v.n1 - v.n2) * bodyC;
     double x = tanhf_((s * amp + v.n2 * 9 * v.kbo * std::exp(-t / 0.07)) * 1.5) / TANH15;
     v.l1 += (x - v.l1) * v.kc; v.l2 += (v.l1 - v.l2) * v.kc; x = v.l2;
     double fg = 1;
@@ -451,7 +462,7 @@ private:
       double w = 0.5 - 0.5 * std::cos(PI * dXf); m = m * (1 - w) + mo * w;
       dXf = std::max(0.0, dXf - dXfS);
     }
-    if (osRed > redShow) redShow = osRed;
+    if (osRed > mDrv) mDrv = (float)osRed;
     osRed = 0;
     notch.run(m); m = m - (m - notch.lp - notch.hp) * nPostG;
 
@@ -459,7 +470,7 @@ private:
     if (ckVel > 0.001 && ckAge < ckLen) {
       double a = ckAge, t = a / sr;
       double imp = a < ckW ? std::sin(PI * a / ckW) : 0;
-      ckN += (rnd() - ckN) * 0.7;
+      ckN += (rndS(ckSeed) - ckN) * 0.7;
       double slap = ckBP.run(ckN) * std::exp(-t / 0.0012) * 0.7;
       ckPh += ckMf * (1 + 0.3 * std::exp(-t / 0.002)) / sr;
       double ring = std::sin(ckPh * TAU) * std::exp(-t / 0.006);
@@ -544,11 +555,17 @@ private:
     eDuckDb += (eT - eDuckDb) * (eT > eDuckDb ? dDown : dUp);
     double vG = dbToG(-vDuckDb), eG = dbToG(-eDuckDb);
     double wL = rL * vG + xL * eG, wR = rR * vG + xR * eG;
+    if (1 - vG > mDuckV) mDuckV = (float)(1 - vG);
+    if (1 - eG > mDuckE) mDuckE = (float)(1 - eG);
 
     gDry += (dryG - gDry) * gC; gWet += (wetG - gWet) * gC;
     double sL = dry * gDry + wL * gWet, sR = dry * gDry + wR * gWet;
     sL *= cDrive; sR *= cDrive;
-    clipLim.run(sL, sR, lo2); double lL = lo2[0], lR = lo2[1]; clipLim.red = 0;
+    { double a = std::max(std::abs(sL), std::abs(sR)), red2 = a > 0.05 ? 1 - std::abs(soft(a)) / a : 0;
+      if (curCm != 1 && red2 > mClip) mClip = (float)red2; }
+    clipLim.run(sL, sR, lo2); double lL = lo2[0], lR = lo2[1];
+    if (curCm == 1 && clipLim.red > mClip) mClip = (float)clipLim.red;
+    clipLim.red = 0;
     double qL = osL.run(sL, [](double v) { return soft(v); }), qR = osR.run(sR, [](double v) { return soft(v); });
     { int oq = clipI; double tL = clipDL[oq], tR = clipDR[oq]; clipDL[oq] = (float)qL; clipDR[oq] = (float)qR; clipI = (oq + 1) % (int)clipDL.size(); qL = tL; qR = tR; }
     if (cXf > 0) {
@@ -573,6 +590,7 @@ private:
       if (dbv > thr) gdb -= (dbv - thr) * 0.75 * sq;
       else if (dbv > upT - 30) gdb += std::min(12.0, (thr - dbv) * 0.5) * sq * (dbv > upT ? 1 : std::max(0.0, 1 - (upT - dbv) / 30));
       sum2 += bands[j] * dbToG(gdb + sq * 4);
+      if (-gdb > mSeal[j]) mSeal[j] = (float)-gdb;
     }
     tFast += (std::abs(mm) - tFast) * tF; tSlow += (std::abs(mm) - tSlow) * tS;
     double trans = std::max(0.0, tFast - tSlow), drv = 1 + cr * 5;
@@ -580,12 +598,25 @@ private:
     double mOut = mm + (wet - mm) * mx;
     double oL2 = (mOut + sd) * vol * 2, oR2 = (mOut - sd) * vol * 2;
     dcL += (oL2 - dcL) * dcC; oL2 -= dcL; dcR += (oR2 - dcR) * dcC; oR2 -= dcR;
-    ceilLim.run(oL2, oR2, lo2); oL2 = lo2[0]; oR2 = lo2[1]; ceilLim.red = 0;
+    ceilLim.run(oL2, oR2, lo2); oL2 = lo2[0]; oR2 = lo2[1];
+    if (ceilLim.red > mLim) mLim = (float)ceilLim.red;
+    ceilLim.red = 0;
     if (oL2 > 0.99 || oL2 < -0.99) oL2 = tanhf_(oL2);
     if (oR2 > 0.99 || oR2 < -0.99) oR2 = tanhf_(oR2);
     if (!std::isfinite(oL2) || !std::isfinite(oR2)) { oL2 = oR2 = 0; reset(); }
     out[0] = oL2; out[1] = oR2;
     double pk = std::max(std::abs(oL2), std::abs(oR2)); if (pk > peakOut) peakOut = (float)pk;
+    // live view column
+    curCol.dry = std::max(curCol.dry, (float)std::abs(dry * gDry));
+    curCol.wet = std::max(curCol.wet, (float)std::max(std::abs(wL), std::abs(wR)) * (float)gWet);
+    curCol.out = std::max(curCol.out, (float)pk);
+    curCol.duck = std::max(curCol.duck, (float)std::max(1 - vG, 1 - eG));
+    if (++colCnt >= colLen) {
+      int w = ringW.load(std::memory_order_relaxed);
+      ring[w] = curCol; ringW.store((w + 1) % RING, std::memory_order_release);
+      curCol = Col(); colCnt = 0;
+    }
+    voicePos = voices[0].on && !voices[0].fading ? voices[0].age / (voices[0].kL * sr) : -1;
   }
 };
 

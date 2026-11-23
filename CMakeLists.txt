@@ -9,6 +9,8 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_plugin(undertow
   COMPANY_NAME "bsbr"
+  COMPANY_WEBSITE "https://bisbarra.com"
+  BUNDLE_ID com.bisbarra.undertow
   PLUGIN_MANUFACTURER_CODE Bsbr
   PLUGIN_CODE Undr
   FORMATS VST3 AU Standalone
@@ -19,8 +21,9 @@ juce_add_plugin(undertow
   AU_MAIN_TYPE kAudioUnitType_MusicDevice
   VST3_CATEGORIES Instrument Drum)
 
+juce_add_binary_data(UndertowData SOURCES Resources/ShareTechMono-Regular.ttf Resources/bisbarra-logo.png)
 target_sources(undertow PRIVATE src/PluginProcessor.cpp src/PluginEditor.cpp)
 target_include_directories(undertow PRIVATE src)
 target_compile_definitions(undertow PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
-target_link_libraries(undertow PRIVATE juce::juce_audio_utils
+target_link_libraries(undertow PRIVATE UndertowData juce::juce_audio_utils
   PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
